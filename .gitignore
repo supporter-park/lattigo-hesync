@@ -53,3 +53,5 @@ _testmain.go
 # generated
 /Coding
 
+/docs/
+CLAUDE.md
