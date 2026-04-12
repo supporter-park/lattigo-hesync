@@ -32,6 +32,10 @@ type Parameters struct {
 	EphemeralSecretWeight int
 	// CircuitOrder: Value indicating the order of the circuit (default: ModUpThenEncode)
 	CircuitOrder CircuitOrder
+	// ReLUDepth: Number of extra levels between EvalMod and StoC for fused ReLU.
+	// When > 0, extra Q primes are inserted between EvalMod and StoC in the
+	// modulus chain, allowing polynomial ReLU evaluation inside the bootstrap.
+	ReLUDepth int
 }
 
 // NewParametersFromLiteral instantiates a [Parameters] from the residual [ckks.Parameters] and
@@ -192,8 +196,19 @@ func NewParametersFromLiteral(residualParameters ckks.Parameters, btpLit Paramet
 		return Parameters{}, err
 	}
 
+	// ReLU depth: extra levels between EvalMod and StoC for fused activation
+	var reluDepth int
+	var reluLogScale int = 30
+	if btpLit.ReLUDepth != nil {
+		reluDepth = *btpLit.ReLUDepth
+	}
+	if btpLit.ReLULogScale != nil {
+		reluLogScale = *btpLit.ReLULogScale
+	}
+
 	// Coeffs To Slots params
-	Mod1ParametersLiteral.LevelQ = S2CParams.LevelQ + Mod1ParametersLiteral.Depth()
+	// ReLU levels are inserted between StoC and EvalMod
+	Mod1ParametersLiteral.LevelQ = S2CParams.LevelQ + reluDepth + Mod1ParametersLiteral.Depth()
 
 	CoeffsToSlotsLevels := make([]int, len(CoeffsToSlotsFactorizationDepthAndLogScales))
 	for i := range CoeffsToSlotsLevels {
@@ -230,6 +245,11 @@ func NewParametersFromLiteral(residualParameters ckks.Parameters, btpLit Paramet
 		}
 
 		LogQBootstrappingCircuit = append(LogQBootstrappingCircuit, qi)
+	}
+
+	// Insert ReLU moduli between StoC and EvalMod
+	for i := 0; i < reluDepth; i++ {
+		LogQBootstrappingCircuit = append(LogQBootstrappingCircuit, reluLogScale)
 	}
 
 	for i := 0; i < Mod1ParametersLiteral.Depth(); i++ {
@@ -351,6 +371,7 @@ func NewParametersFromLiteral(residualParameters ckks.Parameters, btpLit Paramet
 		Mod1ParametersLiteral:   Mod1ParametersLiteral,
 		CoeffsToSlotsParameters: C2SParams,
 		IterationsParameters:    iterParams,
+		ReLUDepth:               reluDepth,
 	}, nil
 }
 

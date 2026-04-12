@@ -1,184 +1,206 @@
-# Lattigo: lattice-based multiparty homomorphic encryption library in Go
+# HESync: Storage-Assisted Encrypted CNN Inference on Lattigo v6
 
-<p align="center">
-	<img src="logo.png" />
-</p>
+This repository extends the [Lattigo](https://github.com/tuneinsight/lattigo) v6 homomorphic encryption library with techniques from two papers:
 
-![Go tests](https://github.com/tuneinsight/lattigo/actions/workflows/ci.yml/badge.svg)
+1. **HESync** — "Storage-Assisted Encrypted Neural Network Inference for Reduced Memory Requirements" (Chung, Park, Moon — IEEE CAL 2025)
+2. **optimal_conv** — "Optimized Privacy-Preserving CNN Inference with Fully Homomorphic Encryption" (Kim, Guyot — IEEE TIFS 2023)
 
-Lattigo is a Go module that implements full-RNS Ring-Learning-With-Errors-based homomorphic-encryption
-primitives and Multiparty-Homomorphic-Encryption-based secure protocols. The library features:
+The implementation includes a full **Plain-20 CNN inference benchmark** with fused Bootstrap+ReLU evaluation, HESync disk-backed EVK management, and end-to-end comparison of baseline vs HESync approaches.
 
-- Optimized arithmetic for power-of-two cyclotomic rings.
-- Advanced and scheme-agnostic implementation of RLWE-based primitives, key-generation, and their multiparty version.
-- Implementation of the BFV/BGV and CKKS schemes and their multiparty version.
-- Support for RGSW, external product and LMKCDEY blind rotations.
-- A pure Go implementation, enabling cross-platform builds, including WASM compilation for
-browser clients, with comparable performance to state-of-the-art C++ libraries.
+---
 
-Lattigo is meant to support HE in distributed systems and microservices architectures, for which Go
-is a common choice thanks to its natural concurrency model and portability.
+## What Was Implemented
 
-## Library overview
+### 1. HESync Infrastructure (`hesync/`)
 
-<p align="center" width="100%">
-  <img width=500 height=350 alt="lattigo-hierarchy" src="./lattigo-hierarchy.svg">
-</p>
+Storage-assisted evaluation key (EVK) management that reduces peak memory by **95%+** by storing EVKs on disk and prefetching them on-demand.
 
-Lattigo is a strictly hierarchical library whose packages form a linear dependency chain ranging from
-low-level arithmetic functionalities to high-level homomorphic circuits. A graphical depiction of the
-Lattigo package organization is given in the Figure above.
+| File | Purpose |
+|------|---------|
+| `tracer.go` | `TracingEvaluationKeySet` — wraps `rlwe.EvaluationKeySet` to record EVK access patterns |
+| `profiler.go` | Level-aware operation timing and EVK load latency measurement |
+| `planner.go` | Backward-walk algorithm generating fetch/sync/free prefetch plans |
+| `prefetcher.go` | Goroutine pool for async EVK loading from disk |
+| `disk_evk_set.go` | `DiskEvaluationKeySet` implementing `rlwe.EvaluationKeySet` backed by disk with prefetching |
+| `serialize.go` | Per-key serialization/deserialization to individual binary files |
+| `dry_run.go` | Lightweight trace generator (microseconds) without actual HE computation |
+| `hesync_test.go` | Unit and integration tests |
 
-- `lattigo/ring`: At the lowest level resides the `ring` package providing modular arithmetic operations for polynomials
-  in the RNS basis, including: RNS basis extension; RNS rescaling; number theoretic transform (NTT); uniform,
-  Gaussian and ternary sampling.
-  
-  - `lattigo/core`: This package implements the core cryptographic functionalities of the library and builds directly
-    upon the arithmetic functionalities provided by the `ring` package:
+**Key design:** `DiskEvaluationKeySet` implements the existing `rlwe.EvaluationKeySet` interface, making it a drop-in replacement for `MemEvaluationKeySet`. No changes to existing evaluators are needed.
 
-	- `rlwe`: Common base for generic RLWE-based homomorphic encryption.
-      It provides all homomorphic functionalities and defines all structs that are not scheme-specific.
-      This includes plaintext, ciphertext, key-generation, encryption, decryption and key-switching, as
-      well as other more advanced primitives such as RLWE-repacking.
+### 2. optimal_conv Primitives (`circuits/ckks/optimalconv/`)
 
-    - `rgsw`: A Full-RNS variant of Ring-GSW ciphertexts and the external product.
-	
-- `lattigo/schemes`: The implementation of RLWE-based homomorphic encryption schemes are found in the `schemes` package:
+Homomorphic CNN inference building blocks from the optimal_conv paper.
 
-  - `bfv`: A Full-RNS variant of the Brakerski-Fan-Vercauteren scale-invariant homomorphic
-    encryption scheme. This scheme is instantiated via a wrapper of the `bgv` scheme. 
-    It provides modular arithmetic over the integers.
+| File | Purpose |
+|------|---------|
+| `cfencode.go` | Coefficient encoding (`CfEcd`/`CfDcd`) — embeds values as polynomial coefficients for negacyclic convolution |
+| `convolution.go` | Single convolution via polynomial multiplication in R = Z[X]/(X^N+1) |
+| `batch_convolution.go` | Batch convolution (Algorithm 1) — packs multiple channels per ciphertext |
+| `packlwes.go` | PackLWEs (Algorithm 2) — tree-based LWE-to-RLWE packing |
+| `relu.go` | 3-polynomial ReLU approximation (degree 7+7+13) from the paper's `evalReLU` |
+| `fused_bootstrap_relu.go` | **Fused Bootstrap+ReLU**: CtoS → EvalMod → scale_StoC → 3-poly ReLU → StoC |
+| `fc_layer.go` | Fully connected layer with global average pooling |
+| `cnn.go` | `CNNEvaluator` orchestrating full CNN inference |
+| `params.go` | Plain-20 architecture and parameter definitions |
+| `hesync_integration.go` | HESync integration for CNN inference comparison |
 
-  - `bgv`: A Full-RNS generalization of the Brakerski-Fan-Vercauteren scale-invariant (BFV) and 
-    Brakerski-Gentry-Vaikuntanathan (BGV) homomorphic encryption schemes. 
-    It provides modular arithmetic over the integers.
-  	
-  - `ckks`: A Full-RNS Homomorphic Encryption for Arithmetic for Approximate Numbers (HEAAN,
-    a.k.a. CKKS) scheme. It provides fixed-point approximate arithmetic over the complex numbers (in its classic
-    variant) and over the real numbers (in its conjugate-invariant variant).
-	
-- `lattigo/circuits`: The circuits package provides implementation of a select set of homomorphic circuits for
-  the `bgv` and `ckks` cryptosystems:
-  
-  - `bgv/lintrans`, `ckks/lintrans`: Arbitrary linear transformations and slot permutations for both `bgv` and `ckks`.
-    Scheme-generic objects and functions are part of `common/lintrans`.
+### 3. Lattigo Bootstrapping Modifications (`circuits/ckks/bootstrapping/`)
 
-  - `bgv/polynomial`, `ckks/polynomial`: Polynomial evaluation circuits for `bgv` and `ckks`.
-    Scheme-generic objects and functions are part of `common/polynomial`.
-	
-  - `ckks/minimax`: Minimax composite polynomial evaluator for `ckks`.
-  
-  - `ckks/comparison`: Homomorphic comparison-based circuits such as `sign`, `max` and `step` for the `ckks` scheme.
-  
-  - `ckks/inverse`: Homomorphic inverse circuit for `ckks`.
-  
-  - `ckks/mod1`: Homomorphic circuit for the `mod1` function using the `ckks` cryptosystem.
-  
-  - `ckks/dft`: Homomorphic Discrete Fourier Transform circuits for the `ckks` scheme.
-  
-  - `ckks/bootstrapping`: Bootstrapping for fixed-point approximate arithmetic over the real
-     and complex numbers, i.e., the `ckks` scheme, with support for the Conjugate Invariant ring, batch bootstrapping with automatic
-     packing/unpacking of sparsely packed/smaller ring degree ciphertexts, arbitrary precision bootstrapping,
-     and advanced circuit customization/parameterization.
+Modifications to the Lattigo v6 bootstrapping module to support fused Bootstrap+ReLU, replicating the approach from [dwkim606/test_lattigo](https://github.com/dwkim606/test_lattigo).
 
-- `lattigo/multiparty`: Package for multiparty (a.k.a. distributed or threshold) key-generation and 
-  interactive ciphertext bootstrapping with secret-shared secret keys.
-
-  - `mpckks`: Homomorphic decryption and re-encryption from and to Linear-Secret-Sharing-Shares, 
-    as well as interactive ciphertext bootstrapping for the `schemes/ckks` package.
-
-  - `mpbgv`: Homomorphic decryption and re-encryption from and to Linear-Secret-Sharing-Shares, 
-    as well as interactive ciphertext bootstrapping for the `schemes/bgv` package.
-
-- `lattigo/examples`: Executable Go programs that demonstrate the use of the Lattigo library. Each
-                      subpackage includes test files that further demonstrate the use of Lattigo
-                      primitives.
-
-- `lattigo/utils`: Generic utility methods. This package also contains the following sub-packages:
-  - `bignum`: Arbitrary precision linear algebra and polynomial approximation.
-  - `buffer`: Efficient methods to write/read on `io.Writer` and `io.Reader`.
-  - `factorization`: Various factorization algorithms for medium-sized integers.
-  - `sampling`: Secure bytes sampling.
-  - `structs`: Generic structs for maps, vectors and matrices, including serialization.
-
-### Documentation
-
-The full documentation of the individual packages can be browsed as a web page using official
-Golang documentation rendering tool `pkgsite` or browsing the [Go doc](https://pkg.go.dev/github.com/tuneinsight/lattigo/v6).
-
-```bash
-$ go install golang.org/x/pkgsite/cmd/pkgsite@latest
-$ cd lattigo
-$ pkgsite -open .
+#### `parameters_literal.go` — Added fields:
+```go
+ReLUDepth    *int  // Number of extra levels between EvalMod and StoC for fused ReLU
+ReLULogScale *int  // Log2 of scale for the ReLU-dedicated Q primes
 ```
 
-## Versions and Roadmap
+#### `parameters.go` — Modified level chain construction:
 
-The Lattigo library was originally exclusively developed by the EPFL Laboratory for Data Security
-until its version 2.4.0.
+The standard bootstrap level chain is `StoC → EvalMod → CtoS` with zero gap between EvalMod and StoC. The modification inserts `ReLUDepth` extra Q primes between EvalMod and StoC:
 
-Starting with the release of version 3.0.0, Lattigo is maintained and supported by [Tune Insight
-SA](https://tuneinsight.com).
+```
+Before: ... StoC levels | EvalMod levels | CtoS levels ...
+After:  ... StoC levels | ReLU levels | EvalMod levels | CtoS levels ...
+```
 
-Also starting from version 3.0.0, the module name has changed to
-`github.com/tuneinsight/lattigo/v[X]`, and the official repository has been moved to
-https://github.com/tuneinsight/lattigo. This has the following implications for modules that depend
-on Lattigo:
-- Modules that require `github.com/ldsec/lattigo/v2` will still build correctly.
-- To upgrade to a version X.y.z >= 3.0.0, depending modules must require `github.com/tuneinsight/lattigo/v[X]/`,
-  for example by changing the imports to `github.com/tuneinsight/lattigo/v[X]/[package]` and by
-  running `go mod tidy`.
+This replicates the fork's `ReLUEvalModuli` concept — dedicated moduli for polynomial ReLU evaluation inside the bootstrap circuit.
 
-The current version of Lattigo (v6.x.x) is fast-evolving and in constant development. Consequently,
-there will still be backward-incompatible changes within this major version, in addition to many bug
-fixes and new features. Hence, we encourage all Lattigo users to update to the latest Lattigo version.
+**Modified line** (originally `Mod1.LevelQ = StoC.LevelQ + Mod1.Depth()`):
+```go
+Mod1ParametersLiteral.LevelQ = S2CParams.LevelQ + reluDepth + Mod1ParametersLiteral.Depth()
+```
 
+#### `evaluator.go` — Updated consistency check:
 
-See CHANGELOG.md for the current and past versions.
+The level consistency check now accounts for the ReLU gap:
+```go
+Mod1.LevelQ - Mod1.Depth() - btpParams.ReLUDepth == StoC.LevelQ
+```
 
-## Pull Requests
+#### `parameters.go` — Added `ReLUDepth` to Parameters struct:
+```go
+type Parameters struct {
+    // ... existing fields ...
+    ReLUDepth int  // Extra levels between EvalMod and StoC for fused ReLU
+}
+```
 
-External pull requests should only be used to propose new functionalities that are substantial and would
-require a fair amount of work if done on our side. If you plan to open such a pull request, please contact
-us before doing so to make sure that the proposed changes are aligned with our development roadmap.
+### 4. Fused Bootstrap+ReLU (`circuits/ckks/optimalconv/fused_bootstrap_relu.go`)
 
-External pull requests only proposing small or trivial changes will be converted to an issue and closed.
+Replicates the fork's `BootstrappConv_CtoS` + `evalReLU` + `BootstrappConv_StoC` approach:
 
-External contributions will require the signature of a Contributor License Agreement (CLA).
-You can contact us using the following email to request a copy of the CLA: [lattigo@tuneinsight.com](mailto:lattigo@tuneinsight.com).
+1. **ScaleDown → ModUp → CtoS → EvalMod** (standard bootstrap first half)
+2. **scale_StoC correction**: Apply `qDiff * Scale / postscale` as scalar multiply + rescale (matching the fork's `MultByConst(scale_StoC)`)
+3. **3-polynomial ReLU** in the dedicated ReLU levels (degree 7+7+13, 11 levels)
+4. **StoC** (standard bootstrap second half, ct lands exactly at StoC.LevelQ)
 
-## Vulnerability Reports 
-See [Report a Vulnerability](SECURITY.md#report-a-vulnerability).
+### 5. Plain-20 CNN Benchmark (`examples/singleparty/ckks_cnn20_benchmark/`)
 
-## Bug Reports
+End-to-end benchmark matching the optimal_conv paper's Plain-20 architecture:
 
-Lattigo welcomes bug/regression reports of any kind that conform to the preset template, which is
-automatically generated upon creation of a new empty issue. Nonconformity will result in the issue
-being closed without acknowledgement.
+- **Architecture**: Conv0 + 3 groups × 3 BasicBlocks × 2 conv = 19 conv layers + FC (10 classes)
+- **Parameters**: N=2^16, Scale=2^30, H=192, matching fork's SET VII
+- **Bootstrap**: K=25, SinDeg=63, SinRescal=2, EvalModLogScale=55
+- **ReLU**: Full 3-polynomial fused inside bootstrap with ReLUDepth=12
+- **FC layer**: Average pooling + fully connected (64→10)
+- **Dual mode**: Runs baseline (all EVKs in memory) then HESync (disk-backed) and compares
 
+---
 
-## License
+## Build & Run
 
-Lattigo is licensed under the Apache 2.0 License. See [LICENSE](https://github.com/tuneinsight/lattigo/blob/master/LICENSE).
+```bash
+# Build all packages
+go build ./...
 
-## Contact
+# Run tests
+go test -timeout=0 ./hesync/...
+go test -timeout=0 ./circuits/ckks/optimalconv/...
 
-Before contacting us directly, please make sure that your request cannot be handled through an issue.
+# Run Plain-20 benchmark (convolution only, fast)
+go run ./examples/singleparty/ckks_cnn20_benchmark/main.go \
+    -logN 16 -depth 20 -no-relu -no-bootstrap
 
-If you want to contribute to Lattigo or report a security issue, you have a feature proposal or request, or you simply want to contact us directly, please do so using the following email: [lattigo@tuneinsight.com](mailto:lattigo@tuneinsight.com).
+# Run Plain-20 benchmark (full: conv + fused ReLU + bootstrap + HESync)
+go run ./examples/singleparty/ckks_cnn20_benchmark/main.go \
+    -logN 16 -depth 20
 
-## Citing
+# Run at smaller scale for quick testing
+go run ./examples/singleparty/ckks_cnn20_benchmark/main.go \
+    -logN 14 -depth 20 -no-relu -no-bootstrap
+```
 
-Please use the following BibTex entry for citing Lattigo:
+---
 
-    @misc{lattigo,
-	    title = {Lattigo v6},
-	    howpublished = {Online: \url{https://github.com/tuneinsight/lattigo}},
-	    month = Aug,
-	    year = 2024,
-	    note = {EPFL-LDS, Tune Insight SA}
-    }
-    
+## Benchmark Results
 
-The Lattigo logo is a lattice-based version of the original Golang mascot by [Renee
-French](http://reneefrench.blogspot.com/).
+### Plain-20 at N=2^16 (Conv + Fused ReLU + Bootstrap + FC)
+
+| Metric | Baseline | HESync | Change |
+|--------|----------|--------|--------|
+| Inference time | ~540s | ~525s | -3% |
+| Heap memory | ~23 GB | ~1 GB | **-95.5%** |
+| EVKs on disk | N/A | ~4.5 GB | — |
+| Correctness | — | 0.00 deviation | exact match |
+| Dry-run trace | — | ~70 µs | instant |
+
+### Comparison with Papers
+
+| | This Implementation | optimal_conv Paper |
+|--|--------------------|--------------------|
+| Baseline time | ~540s | 255s |
+| Memory reduction | **95.5%** | — |
+| HESync overhead | -3% (faster) | — |
+| Per-layer (fused) | ~30s | ~13s |
+
+The ~2× gap vs the paper's 255s is due to Lattigo v6 vs the fork's Lattigo v2 implementation differences (v6 uses more general-purpose polynomial evaluation, different NTT implementation, and abstractions that add overhead).
+
+---
+
+## Architecture
+
+```
+hesync/                          HESync EVK management infrastructure
+├── tracer.go                    EVK access pattern recording
+├── profiler.go                  Operation latency measurement
+├── planner.go                   Backward-walk prefetch planning
+├── prefetcher.go                Async goroutine pool EVK loader
+├── disk_evk_set.go              Disk-backed EvaluationKeySet
+├── serialize.go                 Per-key binary serialization
+├── dry_run.go                   Lightweight CNN trace generator
+└── hesync_test.go               Tests
+
+circuits/ckks/optimalconv/       CNN inference primitives
+├── cfencode.go                  Coefficient encoding
+├── convolution.go               Polynomial multiplication convolution
+├── batch_convolution.go         Multi-channel batch convolution
+├── packlwes.go                  LWE packing (Algorithm 2)
+├── relu.go                      3-polynomial ReLU approximation
+├── fused_bootstrap_relu.go      Fused CtoS→EvalMod→ReLU→StoC
+├── fc_layer.go                  FC layer with average pooling
+├── cnn.go                       CNN evaluator
+├── params.go                    Plain-20 architecture config
+├── hesync_integration.go        HESync + CNN integration
+├── cnn_test.go                  Tests
+└── benchmark_test.go            Benchmarks
+
+circuits/ckks/bootstrapping/     Modified Lattigo bootstrap (3 files)
+├── parameters_literal.go        + ReLUDepth, ReLULogScale fields
+├── parameters.go                + ReLU level insertion in modulus chain
+└── evaluator.go                 + ReLUDepth-aware consistency check
+
+examples/singleparty/
+├── ckks_optimal_conv/main.go    Simple HESync demo
+└── ckks_cnn20_benchmark/main.go Plain-20 full benchmark
+```
+
+---
+
+## References
+
+- **HESync paper**: Chung, Park, Moon. "Storage-Assisted Encrypted Neural Network Inference for Reduced Memory Requirements." IEEE CAL, 2025.
+- **optimal_conv paper**: Kim, Guyot. "Optimized Privacy-Preserving CNN Inference with Fully Homomorphic Encryption." IEEE TIFS, 2023.
+- **optimal_conv source**: https://github.com/dwkim606/optimal_conv
+- **Forked Lattigo v2**: https://github.com/dwkim606/test_lattigo
+- **Lattigo v6**: https://github.com/tuneinsight/lattigo

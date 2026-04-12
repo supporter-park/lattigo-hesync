@@ -139,6 +139,8 @@ type ParametersLiteral struct {
 	Mod1Degree                                  *int                        // Default: 30
 	DoubleAngle                                 *int                        // Default: 3
 	Mod1InvDegree                               *int                        // Default: 0
+	ReLUDepth                                   *int                        // Default: 0. Number of extra levels between EvalMod and StoC for fused ReLU evaluation.
+	ReLULogScale                                *int                        // Default: 30. Log2 of the scale of the extra ReLU levels.
 }
 
 type CircuitOrder int

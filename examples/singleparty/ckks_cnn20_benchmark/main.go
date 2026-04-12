@@ -65,13 +65,8 @@ func main() {
 	// Without bootstrapping, we need enough Q primes for all layers.
 	var logQ []int
 	if useBts {
-		// With bootstrapping + fused ReLU, we need more residual levels
-		// because StoC.LevelQ = residualMaxLevel + StoC_depth.
-		// Adding extra residual Q primes shifts StoC upward in the level
-		// chain, creating room between EvalMod output and StoC for the
-		// sign polynomial (degree 3, 2 levels).
-		// 14 residual primes + the extra head room for the fused approach.
-		logQ = []int{55, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40}
+		// Fork's SET VII: 2 residual Q primes (55-bit + 49-bit), Scale = 2^30
+		logQ = []int{55, 49}
 	} else {
 		// Without bootstrapping: need numLayers + 1 primes
 		layers := plain20Layers(*depth)
@@ -91,7 +86,7 @@ func main() {
 		LogQ:            logQ,
 		LogP:            []int{61, 61, 61, 61},
 		Xs:              ring.Ternary{H: 192},
-		LogDefaultScale: 40,
+		LogDefaultScale: 30, // Fork uses Scale = 2^30
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Parameter error: %v\n", err)
@@ -104,10 +99,24 @@ func main() {
 	// Bootstrapping parameters
 	var btpParams bootstrapping.Parameters
 	if useBts {
+		// Matching fork's SET VII:
+		//   StoC: 2 levels (60-bit)
+		//   ReLU: 11 levels (30-bit) — fork's ReLUEvalModuli
+		//   EvalMod: 8 levels (55-bit) — SinRange=25, SinDeg=63, SinRescal=2
+		//   CtoS: 4 levels (53-bit)
+		// Fork's SET VII: K=25, SinDeg=63, SinRescal=2, EvalModScale=55-bit
 		btpParametersLit := bootstrapping.ParametersLiteral{
 			LogN: utils.Pointy(*logN),
-			LogP: []int{61, 61, 61, 61},
+			LogP: []int{61, 61, 61, 61, 61},
 			Xs:   params.Xs(),
+			SlotsToCoeffsFactorizationDepthAndLogScales: [][]int{{60}, {60}},
+			CoeffsToSlotsFactorizationDepthAndLogScales: [][]int{{53}, {53}, {53}, {53}},
+			EvalModLogScale: utils.Pointy(55),
+			K:               utils.Pointy(25),
+			Mod1Degree:      utils.Pointy(63),
+			DoubleAngle:     utils.Pointy(2),
+			ReLUDepth:       utils.Pointy(12), // 11 for 3-poly ReLU + 1 for scale_StoC correction
+			ReLULogScale:    utils.Pointy(40),
 		}
 
 		btpParams, err = bootstrapping.NewParametersFromLiteral(params, btpParametersLit)
@@ -218,8 +227,13 @@ func main() {
 	if useReLU {
 		reluEval = optimalconv.NewReLUEvaluator(params, eval, 0.0)
 		if useBts && btpEval != nil {
-			fusedEval = optimalconv.NewFusedBootstrapReLUEvaluator(params, btpEval, 0.0)
-			fmt.Println("  Fused Bootstrap+ReLU: CtoS → EvalMod → Sign(deg3) → StoC")
+			var fusedErr error
+			fusedEval, fusedErr = optimalconv.NewFusedBootstrapReLUEvaluator(params, btpEval, btpParams, 0.0)
+			if fusedErr != nil {
+				fmt.Printf("  Fused Bootstrap+ReLU init failed: %v (using fallback)\n", fusedErr)
+			} else {
+				fmt.Printf("  Fused Bootstrap+ReLU: CtoS → EvalMod → 3-poly ReLU (%d levels) → StoC\n", btpParams.ReLUDepth)
+			}
 		}
 		fmt.Printf("  Fallback ReLU: 3-polynomial approximation (~%d levels)\n", reluEval.LevelsRequired())
 	} else {
