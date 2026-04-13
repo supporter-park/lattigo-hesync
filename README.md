@@ -142,12 +142,11 @@ go run ./examples/singleparty/ckks_cnn20_benchmark/main.go \
 | Inference time | ~540s | ~525s | -3% |
 | Heap memory | ~23 GB | ~1 GB | **-95.5%** |
 | EVKs on disk | N/A | ~4.5 GB | — |
-| Correctness | — | 0.00 deviation | exact match |
 | Dry-run trace | — | ~70 µs | instant |
 
 ### Comparison with Papers
 
-| | This Implementation | optimal_conv Paper |
+| | This Implementation | OG optimal_conv |
 |--|--------------------|--------------------|
 | Baseline time | ~540s | 255s |
 | Memory reduction | **95.5%** | — |
@@ -199,7 +198,6 @@ examples/singleparty/
 
 ## References
 
-- **HESync paper**: Chung, Park, Moon. "Storage-Assisted Encrypted Neural Network Inference for Reduced Memory Requirements." IEEE CAL, 2025.
 - **optimal_conv paper**: Kim, Guyot. "Optimized Privacy-Preserving CNN Inference with Fully Homomorphic Encryption." IEEE TIFS, 2023.
 - **optimal_conv source**: https://github.com/dwkim606/optimal_conv
 - **Forked Lattigo v2**: https://github.com/dwkim606/test_lattigo
