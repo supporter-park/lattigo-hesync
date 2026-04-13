@@ -1,8 +1,7 @@
 # HESync: Storage-Assisted Encrypted CNN Inference on Lattigo v6
 
-This repository extends the [Lattigo](https://github.com/tuneinsight/lattigo) v6 homomorphic encryption library with techniques from two papers:
+This repository extends the [Lattigo](https://github.com/tuneinsight/lattigo) v6 homomorphic encryption library with techniques from:
 
-1. **HESync** — "Storage-Assisted Encrypted Neural Network Inference for Reduced Memory Requirements" (Chung, Park, Moon — IEEE CAL 2025)
 2. **optimal_conv** — "Optimized Privacy-Preserving CNN Inference with Fully Homomorphic Encryption" (Kim, Guyot — IEEE TIFS 2023)
 
 The implementation includes a full **Plain-20 CNN inference benchmark** with fused Bootstrap+ReLU evaluation, HESync disk-backed EVK management, and end-to-end comparison of baseline vs HESync approaches.
