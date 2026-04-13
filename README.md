@@ -1,8 +1,6 @@
 # HESync: Storage-Assisted Encrypted CNN Inference on Lattigo v6
 
-This repository extends the [Lattigo](https://github.com/tuneinsight/lattigo) v6 homomorphic encryption library with techniques from:
-
-**optimal_conv** — "Optimized Privacy-Preserving CNN Inference with Fully Homomorphic Encryption" (Kim, Guyot — IEEE TIFS 2023)
+This repository extends the [Lattigo](https://github.com/tuneinsight/lattigo) v6 homomorphic encryption library with techniques from: "Optimized Privacy-Preserving CNN Inference with Fully Homomorphic Encryption" (Kim, Guyot — IEEE TIFS 2023). This paper is cited below as '**optimal_conv**'.
 
 The implementation includes a full **Plain-20 CNN inference benchmark** with fused Bootstrap+ReLU evaluation, HESync disk-backed EVK management, and end-to-end comparison of baseline vs HESync approaches.
 
@@ -134,23 +132,23 @@ go run ./examples/singleparty/ckks_cnn20_benchmark/main.go \
 
 ## Benchmark Results
 
-### Plain-20 at N=2^16 (Conv + Fused ReLU + Bootstrap + FC)
+### Plain-20 at logN=16 (Conv + Fused ReLU + Bootstrap + FC)
 
-| Metric | Baseline | HESync | Change |
-|--------|----------|--------|--------|
-| Inference time | ~540s | ~525s | -3% |
-| Heap memory | ~23 GB | ~1 GB | **-95.5%** |
-| EVKs on disk | N/A | ~4.5 GB | — |
-| Dry-run trace | — | ~70 µs | instant |
+| Metric | no HESync (baseline) | HESync |
+|--------|----------|--------|
+| Inference time | 540s | 525s (-3%) |
+| Heap memory | ~23 GB | **~1 GB (-95.5%)** |
+| EVKs on disk | N/A | ~4.5 GB |
+| Dry-run trace | — | ~70 µs |
 
-### Comparison with Papers
+### Comparison with optimal_conv
 
-| | This Implementation | OG optimal_conv |
+| | v6 impl. + HESync | optimal_conv |
 |--|--------------------|--------------------|
-| Baseline time | ~540s | 255s |
-| Memory reduction | **95.5%** | — |
+| Baseline time | 540s | 255s |
+| Peak Memory | **-95.5%** | — |
 | HESync overhead | -3% (faster) | — |
-| Per-layer (fused) | ~30s | ~13s |
+| Per-layer (fused) | ~30s | **~13s** |
 
 The ~2× gap vs the paper's 255s is due to Lattigo v6 vs the fork's Lattigo v2 implementation differences (v6 uses more general-purpose polynomial evaluation, different NTT implementation, and abstractions that add overhead).
 

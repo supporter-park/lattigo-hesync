@@ -34,6 +34,9 @@ type FusedBootstrapReLUEvaluator struct {
 	aconst    float64
 
 	reluDepth int
+
+	// Pre-computed scale correction factor (avoids recomputing per evaluation)
+	scaleStoC float64
 }
 
 // NewFusedBootstrapReLUEvaluator creates a new fused evaluator.
@@ -61,6 +64,12 @@ func NewFusedBootstrapReLUEvaluator(
 		coeffs3[i] = coeffs3Raw[i] * complex(bconst, 0)
 	}
 
+	// Pre-compute scale_StoC correction factor
+	Q0 := float64(btpCkksParams.Q()[0])
+	qDiff := Q0 / math.Exp2(math.Round(math.Log2(Q0)))
+	postscale := math.Exp2(math.Round(math.Log2(Q0/btpEval.Mod1Parameters.MessageRatio()))) / btpEval.Mod1Parameters.MessageRatio()
+	scaleStoC := qDiff * btpCkksParams.DefaultScale().Float64() / postscale
+
 	return &FusedBootstrapReLUEvaluator{
 		btpEval:   btpEval,
 		polyEval:  polynomial.NewEvaluator(btpCkksParams, btpEval.Evaluator),
@@ -70,6 +79,7 @@ func NewFusedBootstrapReLUEvaluator(
 		signPoly3: bignum.NewPolynomial(bignum.Monomial, coeffs3, [2]float64{-1, 1}),
 		aconst:    aconst,
 		reluDepth: reluDepth,
+		scaleStoC: scaleStoC,
 	}, nil
 }
 

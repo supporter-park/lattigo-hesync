@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"runtime/pprof"
 	"time"
 
 	"github.com/tuneinsight/lattigo/v6/circuits/ckks/bootstrapping"
@@ -42,7 +43,24 @@ func main() {
 	evkDir := flag.String("evk-dir", "", "EVK storage directory (default: temp)")
 	noReLU := flag.Bool("no-relu", false, "disable ReLU (conv-only benchmark)")
 	noBts := flag.Bool("no-bootstrap", false, "disable bootstrapping")
+	cpuProfile := flag.String("cpuprofile", "", "write CPU profile to file")
+	maxLayers := flag.Int("max-layers", 0, "max layers to run (0 = all, useful for quick profiling)")
 	flag.Parse()
+
+	// CPU profiling support
+	if *cpuProfile != "" {
+		f, err := os.Create(*cpuProfile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Could not create CPU profile: %v\n", err)
+			os.Exit(1)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			fmt.Fprintf(os.Stderr, "Could not start CPU profile: %v\n", err)
+			os.Exit(1)
+		}
+		defer pprof.StopCPUProfile()
+	}
 
 	useReLU := !*noReLU
 	useBts := !*noBts
@@ -266,7 +284,7 @@ func main() {
 	runtime.ReadMemStats(&memBB)
 
 	baselineStart := time.Now()
-	baselineCts, baselineLT := runInference(eval, encoder, params, reluEval, btpEval, fusedEval, fcEval, finalSpatialSize, ctInput, layers)
+	baselineCts, baselineLT := runInference(eval, encoder, params, reluEval, btpEval, fusedEval, fcEval, finalSpatialSize, ctInput, layers, *maxLayers)
 	baselineTime := time.Since(baselineStart)
 
 	runtime.GC()
@@ -337,7 +355,7 @@ func main() {
 
 	hesyncStart := time.Now()
 	hesyncFcEval := optimalconv.NewFCLayerEvaluator(params, diskEval, encoder)
-	hesyncCts, hesyncLT := runInference(diskEval, encoder, params, reluEval, btpEval, fusedEval, hesyncFcEval, finalSpatialSize, ctInput, layers)
+	hesyncCts, hesyncLT := runInference(diskEval, encoder, params, reluEval, btpEval, fusedEval, hesyncFcEval, finalSpatialSize, ctInput, layers, *maxLayers)
 	hesyncTime := time.Since(hesyncStart)
 	diskEvk.Stop()
 
@@ -430,6 +448,7 @@ func main() {
 
 // runInference runs the full batch-packed CNN inference.
 // Each layer: Conv (ct-pt mul + rescale) → optional ReLU → optional Bootstrap
+// If maxLayers > 0, only runs the first maxLayers layers (useful for profiling).
 func runInference(
 	eval *ckks.Evaluator,
 	encoder *ckks.Encoder,
@@ -441,12 +460,19 @@ func runInference(
 	finalSpatialSize int,
 	ctInput *rlwe.Ciphertext,
 	layers []optimalconv.CNNLayerConfig,
+	maxLayers int,
 ) ([]*rlwe.Ciphertext, []time.Duration) {
 	// +1 for FC layer timing
 	layerTimes := make([]time.Duration, len(layers)+1)
 	currentCts := []*rlwe.Ciphertext{ctInput.CopyNew()}
 
-	for i, layer := range layers {
+	numLayers := len(layers)
+	if maxLayers > 0 && maxLayers < numLayers {
+		numLayers = maxLayers
+	}
+
+	for i := 0; i < numLayers; i++ {
+		layer := layers[i]
 		layerStart := time.Now()
 
 		// ─── Convolution (ct-pt multiply + rescale) ───
@@ -477,7 +503,7 @@ func runInference(
 		// ─── Fused Bootstrap+ReLU or separate ───
 		if layer.HasActivation && layer.HasBootstrap && fusedEval != nil {
 			for c := range currentCts {
-				result, err := fusedEval.Evaluate(currentCts[c])
+				result, timing, err := fusedEval.EvaluateFast(currentCts[c])
 				if err != nil {
 					// Fallback to separate ReLU + Bootstrap
 					fmt.Fprintf(os.Stderr, "  Layer %d fused failed (%v), using fallback\n", i, err)
@@ -494,6 +520,7 @@ func runInference(
 					continue
 				}
 				currentCts[c] = result
+				fmt.Printf("    Phase timing: %v\n", timing)
 			}
 		} else {
 			if layer.HasActivation && reluEval != nil {
