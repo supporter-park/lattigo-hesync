@@ -2,7 +2,7 @@
 
 This repository extends the [Lattigo](https://github.com/tuneinsight/lattigo) v6 homomorphic encryption library with techniques from:
 
-2. **optimal_conv** — "Optimized Privacy-Preserving CNN Inference with Fully Homomorphic Encryption" (Kim, Guyot — IEEE TIFS 2023)
+**optimal_conv** — "Optimized Privacy-Preserving CNN Inference with Fully Homomorphic Encryption" (Kim, Guyot — IEEE TIFS 2023)
 
 The implementation includes a full **Plain-20 CNN inference benchmark** with fused Bootstrap+ReLU evaluation, HESync disk-backed EVK management, and end-to-end comparison of baseline vs HESync approaches.
 
